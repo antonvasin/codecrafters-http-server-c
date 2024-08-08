@@ -53,11 +53,39 @@ int main() {
 	printf("Waiting for a client to connect...\n");
 	client_addr_len = sizeof(client_addr);
 
-	int fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+	int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
 	printf("Client connected\n");
 
-  char *reply = "HTTP/1.1 200 OK\r\n\r\n";
-  int bytes_sent = send(fd, reply, strlen(reply), 0);
+  // to parse request
+  // - [x] get text of request
+  // - [ ] get request target from by looking for before first "\r\n"
+  // - [ ] respond 200 for "/" and 404 for any "/path"
+
+  char buffer[1024];
+
+  // TODO: check for response_size > buffer
+  if (recv(client_fd, buffer, 1024, 0) < 0) {
+    printf("Can't receive request: %s\n", strerror(errno));
+    return 1;
+  }
+  // TODO: handle 0 byte request
+
+  char *reqline = strtok(buffer, "\r\n\r\n");
+  // take second part of reqline
+  char *path = strtok(reqline, " ");
+  path = strtok(NULL, " ");
+
+  int is_known_route = 0;
+
+  if (strcmp(path, "/") == 0) {
+    is_known_route = 1;
+  }
+
+  char *reply = is_known_route > 0 ? "HTTP/1.1 200 OK\r\n\r\n" : "HTTP/1.1 404 Not Found\r\n\r\n";
+
+  printf("Known route: %i\n", is_known_route);
+
+  int bytes_sent = send(client_fd, reply, strlen(reply), 0);
 	close(server_fd);
 
 	return 0;
