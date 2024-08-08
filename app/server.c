@@ -56,11 +56,6 @@ int main() {
 	int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
 	printf("Client connected\n");
 
-  // to parse request
-  // - [x] get text of request
-  // - [ ] get request target from by looking for before first "\r\n"
-  // - [ ] respond 200 for "/" and 404 for any "/path"
-
   char buffer[1024];
 
   // TODO: check for response_size > buffer
