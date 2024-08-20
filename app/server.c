@@ -58,29 +58,29 @@ int main() {
 
   char buffer[1024];
 
-  // TODO: check for response_size > buffer
   if (recv(client_fd, buffer, 1024, 0) < 0) {
     printf("Can't receive request: %s\n", strerror(errno));
     return 1;
   }
-  // TODO: handle 0 byte request
 
-  char *reqline = strtok(buffer, "\r\n\r\n");
-  // take second part of reqline
-  char *path = strtok(reqline, " ");
+  int bytes_sent;
+  char *path = strtok(buffer, " ");
   path = strtok(NULL, " ");
 
-  int is_known_route = 0;
-
   if (strcmp(path, "/") == 0) {
-    is_known_route = 1;
+    char* res = "HTTP/1.1 200 OK\r\n\r\n";
+    bytes_sent = send(client_fd, res, strlen(res), 0);
+  } else if (strncmp("/echo/", path, 6) == 0) {
+    char res[1024];
+    char *msg = path + 6;
+    sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
+    bytes_sent = send(client_fd, res, strlen(res), 0);
+  } else {
+
+    char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
+    bytes_sent = send(client_fd, res, strlen(res), 0);
   }
 
-  char *reply = is_known_route > 0 ? "HTTP/1.1 200 OK\r\n\r\n" : "HTTP/1.1 404 Not Found\r\n\r\n";
-
-  printf("Known route: %i\n", is_known_route);
-
-  int bytes_sent = send(client_fd, reply, strlen(reply), 0);
 	close(server_fd);
 
 	return 0;
