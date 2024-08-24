@@ -75,8 +75,23 @@ int main() {
     char *msg = path + 6;
     sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
     bytes_sent = send(client_fd, res, strlen(res), 0);
-  } else {
+  } else if (strncmp("/user-agent", path, 11) == 0) {
+    char res[1042];
 
+    char *header = strtok(NULL, "\r\n");
+    char *msg = "";
+    while (header != NULL) {
+      if (strncmp("User-Agent:", header, 11) == 0) {
+        strtok(header, ":");
+        msg = strtok(NULL, "\r\n") + 1;
+        break;
+      }
+      header = strtok(NULL, "\r\n");
+    }
+
+    sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
+    bytes_sent = send(client_fd, res, strlen(res), 0);
+  } else {
     char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
     bytes_sent = send(client_fd, res, strlen(res), 0);
   }
