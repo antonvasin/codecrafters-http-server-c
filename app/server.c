@@ -81,6 +81,7 @@ int main() {
     char *header = strtok(NULL, "\r\n");
     char *msg = "";
     while (header != NULL) {
+      // FIXME: headers are case-insensitive
       if (strncmp("User-Agent:", header, 11) == 0) {
         strtok(header, ":");
         msg = strtok(NULL, "\r\n") + 1;
