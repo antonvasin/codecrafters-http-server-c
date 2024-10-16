@@ -6,6 +6,15 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <pthread.h>
+
+#define WORKER_THREADS 5
+
+pthread_t threads[WORKER_THREADS];
+int thread_ids[WORKER_THREADS];
+int server_fd;
+
+void* worker(void* args);
 
 int main() {
 	// Disable output buffering
@@ -15,10 +24,9 @@ int main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	printf("Logs from your program will appear here!\n");
 
-	// Uncomment this block to pass the first stage
-
-	int server_fd, client_addr_len;
-	struct sockaddr_in client_addr;
+	// int server_fd, client_fd;
+  // socklen_t client_addr_len;
+	// struct sockaddr_in client_addr;
 
 	server_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_fd == -1) {
@@ -50,54 +58,78 @@ int main() {
 		return 1;
 	}
 
-	printf("Waiting for a client to connect...\n");
-	client_addr_len = sizeof(client_addr);
-
-	int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
-	printf("Client connected\n");
-
-  char buffer[1024];
-
-  if (recv(client_fd, buffer, 1024, 0) < 0) {
-    printf("Can't receive request: %s\n", strerror(errno));
-    return 1;
+  // Spawn threads for handling requests
+  for (int i = 0; i < WORKER_THREADS; i++) {
+    thread_ids[i] = i;
+    if (pthread_create(&threads[i], NULL, worker, &thread_ids[i]) != 0) {
+      printf("Failed to create thread %d\n", thread_ids[i]);
+      return 1;
+    }
   }
 
-  int bytes_sent;
-  char *path = strtok(buffer, " ");
-  path = strtok(NULL, " ");
+  for (int i = 0; i < WORKER_THREADS; i++) {
+    if (pthread_join(threads[i], NULL) != 0) {
+      perror("pthread_join failed");
+      return 1;
+    }
+  }
 
-  if (strcmp(path, "/") == 0) {
-    char* res = "HTTP/1.1 200 OK\r\n\r\n";
-    bytes_sent = send(client_fd, res, strlen(res), 0);
-  } else if (strncmp("/echo/", path, 6) == 0) {
-    char res[1024];
-    char *msg = path + 6;
-    sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
-    bytes_sent = send(client_fd, res, strlen(res), 0);
-  } else if (strncmp("/user-agent", path, 11) == 0) {
-    char res[1042];
+  close(server_fd);
 
-    char *header = strtok(NULL, "\r\n");
-    char *msg = "";
-    while (header != NULL) {
-      // FIXME: headers are case-insensitive
-      if (strncmp("User-Agent:", header, 11) == 0) {
-        strtok(header, ":");
-        msg = strtok(NULL, "\r\n") + 1;
-        break;
-      }
-      header = strtok(NULL, "\r\n");
+  return 0;
+}
+
+void* worker(void* arg) {
+  int id = *(int*)arg;
+  int client_fd;
+	struct sockaddr_in client_addr;
+  socklen_t client_addr_len;
+  client_addr_len = sizeof(client_addr);
+
+	printf("Worker %d waiting for a client to connect...\n", id);
+  while ((client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len))) {
+    printf("Client connected\n");
+
+    char buffer[1024];
+
+    if (recv(client_fd, buffer, 1024, 0) < 0) {
+      printf("Can't receive request: %s\n", strerror(errno));
+      // return 1;
     }
 
-    sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
-    bytes_sent = send(client_fd, res, strlen(res), 0);
-  } else {
-    char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
-    bytes_sent = send(client_fd, res, strlen(res), 0);
+    int bytes_sent;
+    char *path = strtok(buffer, " ");
+    path = strtok(NULL, " ");
+
+    if (strcmp(path, "/") == 0) {
+      char* res = "HTTP/1.1 200 OK\r\n\r\n";
+      bytes_sent = send(client_fd, res, strlen(res), 0);
+    } else if (strncmp("/echo/", path, 6) == 0) {
+      char res[1024];
+      char *msg = path + 6;
+      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
+      bytes_sent = send(client_fd, res, strlen(res), 0);
+    } else if (strncmp("/user-agent", path, 11) == 0) {
+      char res[1042];
+
+      char *header = strtok(NULL, "\r\n");
+      char *msg = "";
+      while (header != NULL) {
+        // FIXME: headers are case-insensitive
+        if (strncmp("User-Agent:", header, 11) == 0) {
+          strtok(header, ":");
+          msg = strtok(NULL, "\r\n") + 1;
+          break;
+        }
+        header = strtok(NULL, "\r\n");
+      }
+
+      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
+      bytes_sent = send(client_fd, res, strlen(res), 0);
+    } else {
+      char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
+      bytes_sent = send(client_fd, res, strlen(res), 0);
+    }
   }
-
-	close(server_fd);
-
-	return 0;
+  return NULL;
 }
