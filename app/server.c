@@ -11,7 +11,7 @@
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
 
-volatile sig_atomic_t server_running = 1;
+volatile int server_running = 1;
 pthread_mutex_t server_running_mutex;
 
 typedef struct soc_queue {
