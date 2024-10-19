@@ -11,48 +11,47 @@
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
 
-typedef struct soc_queue {
+typedef struct Queue {
   int *sockets;
   int size;
   int first;
   int last;
   pthread_mutex_t mutex;
   pthread_cond_t cond;
-} soc_queue;
+} Queue;
 
-typedef struct tpool {
+typedef struct ThreadPool {
   pthread_t *threads;
   int count;
-  soc_queue *queue;
-} tpool;
+} ThreadPool;
 
-typedef struct worker_req {
-  int client_fd;
-} worker_req;
-
-tpool *pool;
+typedef struct WorkerThread {
+  Queue *queue;
+  int id;
+} WorkerThread;
 
 void* worker(void* arg) {
-  tpool *pool = (tpool *)arg;
+  struct WorkerThread *params = (WorkerThread *) arg;
+  Queue *queue = params->queue;
 
-  printf("Starting new worker.\n");
+  printf("[worker %d] Starting new worker.\n", params->id);
   // Waiting for work
   while (1) {
     // Getting client socket
-    pthread_mutex_lock(&pool->queue->mutex);
+    pthread_mutex_lock(&queue->mutex);
 
-    while (pool->queue->first == pool->queue->last) {
-      pthread_cond_wait(&pool->queue->cond, &pool->queue->mutex);
+    while (queue->first == queue->last) {
+      pthread_cond_wait(&queue->cond, &queue->mutex);
     }
-    int client_fd = pool->queue->sockets[pool->queue->first];
-    pool->queue->first = (pool->queue->first + 1) % pool->queue->size;
-    pthread_mutex_unlock(&pool->queue->mutex);
+    int client_fd = queue->sockets[queue->first];
+    queue->first = (queue->first + 1) % queue->size;
+    pthread_mutex_unlock(&queue->mutex);
 
-    printf("Handling request.\n");
+    printf("[worker %d] Handling request.\n", params->id);
     char buffer[1024];
 
     if (recv(client_fd, buffer, 1024, 0) < 0) {
-      printf("Can't receive request: %s\n", strerror(errno));
+      printf("[worker %d] Can't receive request: %s\n", params->id, strerror(errno));
       // return 1;
     }
 
@@ -89,10 +88,10 @@ void* worker(void* arg) {
       char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     }
-    printf("Sent %d bytes.\n", bytes_sent);
+    printf("[worker %d] Sent %d bytes.\n", params->id, bytes_sent);
     close(client_fd);
   }
-  printf("Closing thread...\n");
+  printf("[worker %d] Closing ...\n", params->id);
   pthread_exit(NULL);
 }
 
@@ -107,6 +106,7 @@ int main() {
   int server_fd, client_fd;
   struct sockaddr_in client_addr;
   socklen_t client_addr_len;
+
 
   server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd == -1) {
@@ -140,42 +140,34 @@ int main() {
   }
 
   // Initialize thread pool
-  pool = (tpool *)malloc(sizeof(tpool));
+  ThreadPool *pool = (ThreadPool *)malloc(sizeof(ThreadPool));
   if (pool == NULL) return 1;
   pool->threads = (pthread_t *)malloc(sizeof(pthread_t) * WORKER_THREADS);
-  if (pool->threads == NULL) {
-    free(pool);
-    return 1;
-  }
+  if (pool->threads == NULL) return 1;
   pool->count = WORKER_THREADS;
-  pool->queue = (soc_queue *)malloc(sizeof(soc_queue));
-  if (pool->queue == NULL) return 1;
-  pool->queue->sockets = (int *)malloc(sizeof(int) * QUEUE_SIZE);
-  if (pool->queue->sockets == NULL) {
-    free(pool->queue);
-    free(pool);
-    return 1;
-  }
-  pool->queue->size = QUEUE_SIZE;
-  pool->queue->first = 0;
-  pool->queue->last = 0;
-  if (pthread_mutex_init(&pool->queue->mutex, NULL) != 0) {
-    free(pool->queue->sockets);
-    free(pool->queue);
-    free(pool);
-    return 1;
-  }
-  if (pthread_cond_init(&pool->queue->cond, NULL) != 0) {
-    pthread_mutex_destroy(&pool->queue->mutex);
-    free(pool->queue->sockets);
-    free(pool->queue);
-    free(pool);
+
+  Queue *queue = (Queue *)malloc(sizeof(Queue));
+  if (queue == NULL) return 1;
+
+  queue->sockets = (int *)malloc(sizeof(int) * QUEUE_SIZE);
+  if (queue->sockets == NULL) return 1;
+
+  queue->size = QUEUE_SIZE;
+  queue->first = 0;
+  queue->last = 0;
+  if (pthread_mutex_init(&queue->mutex, NULL) != 0) return 1;
+
+  if (pthread_cond_init(&queue->cond, NULL) != 0) {
+    pthread_mutex_destroy(&queue->mutex);
     return 1;
   }
 
   for (int i = 0; i < WORKER_THREADS; ++i) {
-    // worker_ids[i] = i;
-    if (pthread_create(&pool->threads[i], NULL, worker, (void *)pool) != 0) {
+    struct WorkerThread worker_params = {
+      .queue = queue,
+      .id = i,
+    };
+    if (pthread_create(&pool->threads[i], NULL, worker, &worker_params) != 0) {
       printf("Failed to create thread %d\n", i);
       return 1;
     }
@@ -185,21 +177,22 @@ int main() {
   while (1) {
     client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
     if (client_fd < 0) break;
-    pthread_mutex_lock(&pool->queue->mutex);
+    pthread_mutex_lock(&queue->mutex);
 
-    pool->queue->sockets[pool->queue->last] = client_fd;
-    pool->queue->last = (pool->queue->last + 1) % pool->queue->size;
+    queue->sockets[queue->last] = client_fd;
+    queue->last = (queue->last + 1) % queue->size;
 
-    pthread_cond_signal(&pool->queue->cond);
-    pthread_mutex_unlock(&pool->queue->mutex);
+    pthread_cond_signal(&queue->cond);
+    pthread_mutex_unlock(&queue->mutex);
   }
 
   // Cleanup queue
+  // TODO: handle signals
   printf("Cleaning up...\n");
-  free(pool->queue->sockets);
-  pthread_mutex_destroy(&pool->queue->mutex);
-  pthread_cond_destroy(&pool->queue->cond);
-  free(pool->queue);
+  free(queue->sockets);
+  pthread_mutex_destroy(&queue->mutex);
+  pthread_cond_destroy(&queue->cond);
+  free(queue);
   for (int i = 0; i < pool->count; ++i) {
     if (pthread_join(pool->threads[i], NULL) != 0) {
       fprintf(stderr, "Error joining thread. Continuing...\n");
