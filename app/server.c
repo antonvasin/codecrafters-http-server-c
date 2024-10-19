@@ -11,9 +11,6 @@
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
 
-volatile int server_running = 1;
-pthread_mutex_t server_running_mutex;
-
 typedef struct soc_queue {
   int *sockets;
   int size;
@@ -41,29 +38,15 @@ void* worker(void* arg) {
   printf("Starting new worker.\n");
   // Waiting for work
   while (1) {
-    // Check whether we're running
-    pthread_mutex_lock(&server_running_mutex);
-    int running = server_running;
-    pthread_mutex_unlock(&server_running_mutex);
-    if (!running) break;
-
     // Getting client socket
-    pthread_mutex_lock(&(pool->queue->mutex));
+    pthread_mutex_lock(&pool->queue->mutex);
 
     while (pool->queue->first == pool->queue->last) {
-        pthread_mutex_lock(&server_running_mutex);
-        int running = server_running;
-        pthread_mutex_unlock(&server_running_mutex);
-        if (!running) {
-          pthread_mutex_unlock(&(pool->queue->mutex));
-          break;
-        }
-        pthread_cond_wait(&(pool->queue->cond), &(pool->queue->mutex));
+      pthread_cond_wait(&pool->queue->cond, &pool->queue->mutex);
     }
     int client_fd = pool->queue->sockets[pool->queue->first];
     pool->queue->first = (pool->queue->first + 1) % pool->queue->size;
-    pthread_mutex_unlock(&(pool->queue->mutex));
-    printf("[debug] socket %d\n", client_fd);
+    pthread_mutex_unlock(&pool->queue->mutex);
 
     printf("Handling request.\n");
     char buffer[1024];
@@ -109,51 +92,52 @@ void* worker(void* arg) {
     printf("Sent %d bytes.\n", bytes_sent);
     close(client_fd);
   }
+  printf("Closing thread...\n");
   pthread_exit(NULL);
 }
 
 int main() {
-	// Disable output buffering
-	setbuf(stdout, NULL);
- 	setbuf(stderr, NULL);
+  // Disable output buffering
+  setbuf(stdout, NULL);
+  setbuf(stderr, NULL);
 
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	printf("Logs from your program will appear here!\n");
+  // You can use print statements as follows for debugging, they'll be visible when running tests.
+  printf("Logs from your program will appear here!\n");
 
-	int server_fd, client_fd;
+  int server_fd, client_fd;
   struct sockaddr_in client_addr;
   socklen_t client_addr_len;
 
-	server_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (server_fd == -1) {
-		printf("Socket creation failed: %s...\n", strerror(errno));
-		return 1;
-	}
+  server_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (server_fd == -1) {
+    printf("Socket creation failed: %s...\n", strerror(errno));
+    return 1;
+  }
 
-	// Since the tester restarts your program quite often, setting SO_REUSEADDR
-	// ensures that we don't run into 'Address already in use' errors
-	int reuse = 1;
-	if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-		printf("SO_REUSEADDR failed: %s \n", strerror(errno));
-		return 1;
-	}
+  // Since the tester restarts your program quite often, setting SO_REUSEADDR
+  // ensures that we don't run into 'Address already in use' errors
+  int reuse = 1;
+  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+    printf("SO_REUSEADDR failed: %s \n", strerror(errno));
+    return 1;
+  }
 
-	struct sockaddr_in serv_addr = {
+  struct sockaddr_in serv_addr = {
     .sin_family = AF_INET ,
     .sin_port = htons(4221),
     .sin_addr = { htonl(INADDR_ANY) },
   };
 
-	if (bind(server_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) != 0) {
-		printf("Bind failed: %s \n", strerror(errno));
-		return 1;
-	}
+  if (bind(server_fd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) != 0) {
+    printf("Bind failed: %s \n", strerror(errno));
+    return 1;
+  }
 
-	int connection_backlog = 5;
-	if (listen(server_fd, connection_backlog) != 0) {
-		printf("Listen failed: %s \n", strerror(errno));
-		return 1;
-	}
+  int connection_backlog = 5;
+  if (listen(server_fd, connection_backlog) != 0) {
+    printf("Listen failed: %s \n", strerror(errno));
+    return 1;
+  }
 
   // Initialize thread pool
   pool = (tpool *)malloc(sizeof(tpool));
@@ -175,14 +159,14 @@ int main() {
   pool->queue->size = QUEUE_SIZE;
   pool->queue->first = 0;
   pool->queue->last = 0;
-  if (pthread_mutex_init(&(pool->queue->mutex), NULL) != 0) {
+  if (pthread_mutex_init(&pool->queue->mutex, NULL) != 0) {
     free(pool->queue->sockets);
     free(pool->queue);
     free(pool);
     return 1;
   }
-  if (pthread_cond_init(&(pool->queue->cond), NULL) != 0) {
-    pthread_mutex_destroy(&(pool->queue->mutex));
+  if (pthread_cond_init(&pool->queue->cond, NULL) != 0) {
+    pthread_mutex_destroy(&pool->queue->mutex);
     free(pool->queue->sockets);
     free(pool->queue);
     free(pool);
@@ -199,49 +183,27 @@ int main() {
 
   // Listen for requests
   while (1) {
-    // fd_set read_fds;
-    // struct timeval timeout;
+    client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
+    if (client_fd < 0) break;
+    pthread_mutex_lock(&pool->queue->mutex);
 
-    // FD_ZERO(&read_fds);
-    // FD_SET(server_fd, &read_fds);
+    pool->queue->sockets[pool->queue->last] = client_fd;
+    pool->queue->last = (pool->queue->last + 1) % pool->queue->size;
 
-    // Set the timeout to 1 second
-    // timeout.tv_sec = 1;
-    // timeout.tv_usec = 0;
-    // int result;
-    // result = select(server_fd+1, &read_fds, NULL, NULL, &timeout);
-    // printf("Got new request. %d\n", result);
-    // if (result == -1) {
-    //   perror("select");
-    //   break;
-    // // timeout
-    // } else if (result == 0) {
-    //   break;
-    // } else {
-      client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_addr_len);
-      if (client_fd < 0) break;
-      // Enqueue job
-      pthread_mutex_lock(&(pool->queue->mutex));
-
-      pool->queue->sockets[pool->queue->last] = client_fd;
-      pool->queue->last = (pool->queue->last + 1) % pool->queue->size;
-
-      pthread_cond_signal(&pool->queue->cond);
-      pthread_mutex_unlock(&pool->queue->mutex);
-      printf("Enqueue job, %d\n", pool->queue->last);
-    // }
+    pthread_cond_signal(&pool->queue->cond);
+    pthread_mutex_unlock(&pool->queue->mutex);
   }
 
   // Cleanup queue
-  pthread_mutex_destroy(&server_running_mutex);
+  printf("Cleaning up...\n");
   free(pool->queue->sockets);
-  pthread_mutex_destroy(&(pool->queue->mutex));
-  pthread_cond_destroy(&(pool->queue->cond));
+  pthread_mutex_destroy(&pool->queue->mutex);
+  pthread_cond_destroy(&pool->queue->cond);
   free(pool->queue);
   for (int i = 0; i < pool->count; ++i) {
-      if (pthread_join(pool->threads[i], NULL) != 0) {
-          fprintf(stderr, "Error joining thread. Continuing...\n");
-      }
+    if (pthread_join(pool->threads[i], NULL) != 0) {
+      fprintf(stderr, "Error joining thread. Continuing...\n");
+    }
   }
   free(pool->threads);
   free(pool);
