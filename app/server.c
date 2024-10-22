@@ -25,11 +25,20 @@ typedef struct ThreadPool {
   int count;
 } ThreadPool;
 
-void* worker(void* arg) {
-  Queue *queue = (Queue *) arg;
+// typedef struct WorkerThread {
+//   Queue *queue;
+//   int id;
+// } WorkerThread;
 
+Queue *queue;
+
+void* worker(void* arg) {
+  // struct WorkerThread *params = (WorkerThread *) arg;
+  // Queue *queue = params->queue;
+  int id = *(int *) arg;
+
+  printf("[worker %d] Starting new worker.\n", id);
   // Waiting for work
-  printf("Starting worker\n");
   while (1) {
     // Getting client socket
     pthread_mutex_lock(&queue->mutex);
@@ -41,9 +50,11 @@ void* worker(void* arg) {
     queue->first = (queue->first + 1) % queue->size;
     pthread_mutex_unlock(&queue->mutex);
 
+    // printf("[worker %d] Handling request.\n", id);
     char buffer[1024];
 
     if (recv(client_fd, buffer, 1024, 0) < 0) {
+      printf("[worker %d] Can't receive request: %s\n", id, strerror(errno));
       // return 1;
     }
 
@@ -80,9 +91,10 @@ void* worker(void* arg) {
       char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     }
-    printf("Sent %d bytes\n", bytes_sent);
+    printf("[worker %d] Sent %d bytes.\n", id, bytes_sent);
     close(client_fd);
   }
+  printf("[worker %d] Closing ...\n", id);
   pthread_exit(NULL);
 }
 
@@ -137,7 +149,8 @@ int main() {
   if (pool->threads == NULL) return 1;
   pool->count = WORKER_THREADS;
 
-  Queue *queue = (Queue *)malloc(sizeof(Queue));
+  // Queue *queue = (Queue *)malloc(sizeof(Queue));
+  queue = (Queue *)malloc(sizeof(Queue));
   if (queue == NULL) return 1;
 
   queue->sockets = (int *)malloc(sizeof(int) * QUEUE_SIZE);
@@ -153,8 +166,14 @@ int main() {
     return 1;
   }
 
+  int threads[WORKER_THREADS];
   for (int i = 0; i < WORKER_THREADS; ++i) {
-    if (pthread_create(&pool->threads[i], NULL, worker, queue) != 0) {
+    // struct WorkerThread worker_params = {
+    //   .queue = queue,
+    //   .id = i,
+    // };
+    threads[i] = i;
+    if (pthread_create(&pool->threads[i], NULL, worker, &threads[i]) != 0) {
       printf("Failed to create thread %d\n", i);
       return 1;
     }
