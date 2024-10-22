@@ -98,10 +98,21 @@ void* worker(void* arg) {
   pthread_exit(NULL);
 }
 
-int main() {
+int main(int argc, char **argv) {
   // Disable output buffering
   setbuf(stdout, NULL);
   setbuf(stderr, NULL);
+
+  char path[1024];
+  if (argc > 1) {
+    while (--argc > 0 && *(++argv)[0] == '-') {
+      if (strstr(*argv, "--directory") != NULL) {
+        strcpy(path, *++argv);
+        --argc;
+        printf("Directory is set to '%s'\n", path);
+      }
+    }
+  }
 
   // You can use print statements as follows for debugging, they'll be visible when running tests.
   printf("Logs from your program will appear here!\n");
