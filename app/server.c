@@ -25,17 +25,11 @@ typedef struct ThreadPool {
   int count;
 } ThreadPool;
 
-typedef struct WorkerThread {
-  Queue *queue;
-  int id;
-} WorkerThread;
-
 void* worker(void* arg) {
-  struct WorkerThread *params = (WorkerThread *) arg;
-  Queue *queue = params->queue;
+  Queue *queue = (Queue *) arg;
 
-  printf("[worker %d] Starting new worker.\n", params->id);
   // Waiting for work
+  printf("Starting worker\n");
   while (1) {
     // Getting client socket
     pthread_mutex_lock(&queue->mutex);
@@ -47,11 +41,9 @@ void* worker(void* arg) {
     queue->first = (queue->first + 1) % queue->size;
     pthread_mutex_unlock(&queue->mutex);
 
-    printf("[worker %d] Handling request.\n", params->id);
     char buffer[1024];
 
     if (recv(client_fd, buffer, 1024, 0) < 0) {
-      printf("[worker %d] Can't receive request: %s\n", params->id, strerror(errno));
       // return 1;
     }
 
@@ -88,10 +80,9 @@ void* worker(void* arg) {
       char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     }
-    printf("[worker %d] Sent %d bytes.\n", params->id, bytes_sent);
+    printf("Sent %d bytes\n", bytes_sent);
     close(client_fd);
   }
-  printf("[worker %d] Closing ...\n", params->id);
   pthread_exit(NULL);
 }
 
@@ -163,11 +154,7 @@ int main() {
   }
 
   for (int i = 0; i < WORKER_THREADS; ++i) {
-    struct WorkerThread worker_params = {
-      .queue = queue,
-      .id = i,
-    };
-    if (pthread_create(&pool->threads[i], NULL, worker, &worker_params) != 0) {
+    if (pthread_create(&pool->threads[i], NULL, worker, queue) != 0) {
       printf("Failed to create thread %d\n", i);
       return 1;
     }
