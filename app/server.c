@@ -27,18 +27,11 @@ typedef struct ThreadPool {
   int count;
 } ThreadPool;
 
-// typedef struct WorkerThread {
-//   Queue *queue;
-//   int id;
-// } WorkerThread;
-
 Queue *queue;
 
-char file_dir[1024];
+char files_dir_path[1024];
 
 void* worker(void* arg) {
-  // struct WorkerThread *params = (WorkerThread *) arg;
-  // Queue *queue = params->queue;
   int id = *(int *) arg;
 
   printf("[worker %d] Starting new worker.\n", id);
@@ -65,16 +58,20 @@ void* worker(void* arg) {
     int bytes_sent;
     char *path = strtok(buffer, " ");
     path = strtok(NULL, " ");
+    int match = 0;
 
     if (strcmp(path, "/") == 0) {
+      match = 1;
       char *res = "HTTP/1.1 200 OK\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else if (strncmp("/echo/", path, 6) == 0) {
+      match = 1;
       char res[1024];
       char *msg = path + 6;
       sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else if (strncmp("/user-agent", path, 11) == 0) {
+      match = 1;
       char res[1042];
 
       char *header = strtok(NULL, "\r\n");
@@ -93,29 +90,30 @@ void* worker(void* arg) {
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else if (strncmp("/files/", path, 7) == 0) {
       char filepath[1024];
-      sprintf(filepath, "%s%s", file_dir, path + 6);
+      sprintf(filepath, "%s%s", files_dir_path, path + 6);
       int file_d = open(filepath, O_RDONLY, 0);
       if (file_d < 0) {
         printf("Can't open file '%s'\n", filepath);
-        goto notfound;
-      }
-      char buf[FILE_BUF_SIZE];
-      int n;
-      int filesize = 0;
-      while ((n = read(file_d, buf, FILE_BUF_SIZE)) > 0) {
-        filesize += n;
-      }
-      printf("Sending file '%s' (%d bytes)...\n", filepath, filesize);
-      char res[2048];
-      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", filesize, buf);
-      bytes_sent = send(client_fd, res, strlen(res), 0);
-    } else {
-notfound:
-      {
-        char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
+      } else {
+        match = 1;
+        char filebuf[FILE_BUF_SIZE];
+        int filesize = 0;
+        int n;
+        while ((n = read(file_d, filebuf, FILE_BUF_SIZE)) > 0) {
+          filesize += n;
+        }
+        printf("Sending file '%s' (%d bytes)...\n", filepath, filesize);
+        char res[2048];
+        sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", filesize, filebuf);
         bytes_sent = send(client_fd, res, strlen(res), 0);
       }
     }
+
+    if (!match) {
+      char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
+      bytes_sent = send(client_fd, res, strlen(res), 0);
+    }
+
     printf("[worker %d] Sent %d bytes.\n", id, bytes_sent);
     close(client_fd);
   }
@@ -132,12 +130,14 @@ int main(int argc, char **argv) {
     while (--argc > 0 && *(++argv)[0] == '-') {
       if (strstr(*argv, "--directory") != NULL) {
         // Save file_dir and advance current pointer one arg ahead
-        strcpy(file_dir, *++argv);
+        strcpy(files_dir_path, *++argv);
         --argc;
-        printf("Directory is set to '%s'\n", file_dir);
       }
     }
+  } else {
+    getcwd(files_dir_path, sizeof((files_dir_path)));
   }
+  printf("Directory is set to '%s'\n", files_dir_path);
 
   // You can use print statements as follows for debugging, they'll be visible when running tests.
   printf("Logs from your program will appear here!\n");
@@ -185,7 +185,6 @@ int main(int argc, char **argv) {
   if (pool->threads == NULL) return 1;
   pool->count = WORKER_THREADS;
 
-  // Queue *queue = (Queue *)malloc(sizeof(Queue));
   queue = (Queue *)malloc(sizeof(Queue));
   if (queue == NULL) return 1;
 
@@ -204,10 +203,6 @@ int main(int argc, char **argv) {
 
   int threads[WORKER_THREADS];
   for (int i = 0; i < WORKER_THREADS; ++i) {
-    // struct WorkerThread worker_params = {
-    //   .queue = queue,
-    //   .id = i,
-    // };
     threads[i] = i;
     if (pthread_create(&pool->threads[i], NULL, worker, &threads[i]) != 0) {
       printf("Failed to create thread %d\n", i);
