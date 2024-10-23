@@ -32,6 +32,8 @@ typedef struct ThreadPool {
 
 Queue *queue;
 
+char file_dir[1024];
+
 void* worker(void* arg) {
   // struct WorkerThread *params = (WorkerThread *) arg;
   // Queue *queue = params->queue;
@@ -88,8 +90,14 @@ void* worker(void* arg) {
       sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else if (strncmp("/files/", path, 7) == 0) {
-      char *filename = path + 7;
-      printf("Sending file '%s'...\n", filename);
+      char filepath[1024];
+      sprintf(filepath, "%s%s", file_dir, path + 6);
+      FILE *file_d;
+      if ((file_d = fopen(filepath, "r")) == NULL) {
+        printf("Can't open file '%s'\n", filepath);
+        continue;
+      }
+      printf("Sending file '%s'...\n", filepath);
       char *res = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else {
@@ -108,14 +116,13 @@ int main(int argc, char **argv) {
   setbuf(stdout, NULL);
   setbuf(stderr, NULL);
 
-  char path[1024];
   if (argc > 1) {
     while (--argc > 0 && *(++argv)[0] == '-') {
       if (strstr(*argv, "--directory") != NULL) {
-        // Save path and advance current pointer one arg ahead
-        strcpy(path, *++argv);
+        // Save file_dir and advance current pointer one arg ahead
+        strcpy(file_dir, *++argv);
         --argc;
-        printf("Directory is set to '%s'\n", path);
+        printf("Directory is set to '%s'\n", file_dir);
       }
     }
   }
