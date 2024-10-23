@@ -56,8 +56,8 @@ void* worker(void* arg) {
     }
 
     int bytes_sent;
-    char *path = strtok(buffer, " ");
-    path = strtok(NULL, " ");
+    char *method = strtok(buffer, " ");
+    char *path = strtok(NULL, " ");
     int match = 0;
 
     if (strcmp(path, "/") == 0) {
@@ -91,21 +91,35 @@ void* worker(void* arg) {
     } else if (strncmp("/files/", path, 7) == 0) {
       char filepath[1024];
       sprintf(filepath, "%s%s", files_dir_path, path + 6);
-      int file_d = open(filepath, O_RDONLY, 0);
-      if (file_d < 0) {
-        printf("Can't open file '%s'\n", filepath);
-      } else {
-        match = 1;
-        char filebuf[FILE_BUF_SIZE];
-        int filesize = 0;
-        int n;
-        while ((n = read(file_d, filebuf, FILE_BUF_SIZE)) > 0) {
-          filesize += n;
+
+      if (strcmp(method, "GET") == 0) {
+        int file_d = open(filepath, O_RDONLY, 0);
+        if (file_d < 0) {
+          printf("Can't open file '%s'\n", filepath);
+        } else {
+          match = 1;
+          char filebuf[FILE_BUF_SIZE];
+          int filesize = 0;
+          int n;
+          while ((n = read(file_d, filebuf, FILE_BUF_SIZE)) > 0) {
+            filesize += n;
+          }
+          printf("Sending file '%s' (%d bytes)...\n", filepath, filesize);
+          char res[2048];
+          sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", filesize, filebuf);
+          bytes_sent = send(client_fd, res, strlen(res), 0);
         }
-        printf("Sending file '%s' (%d bytes)...\n", filepath, filesize);
-        char res[2048];
-        sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", filesize, filebuf);
-        bytes_sent = send(client_fd, res, strlen(res), 0);
+      } else if (strcmp(method, "POST") == 0) {
+        int file_d = creat(filepath, 0666);
+        if (file_d < 0) {
+          printf("Can't write to file '%s'\n", filepath);
+        } else {
+          match = 1;
+          // char *body = strstr(buffer, "\r\n\r\n");
+          printf("BODY %s\n", buffer);
+          char *res = "HTTP/1.1 201 Created\r\n\r\n";
+          bytes_sent = send(client_fd, res, strlen(res), 0);
+        }
       }
     }
 
