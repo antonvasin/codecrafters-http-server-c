@@ -7,9 +7,11 @@
 #include <errno.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <fcntl.h>
 
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
+#define FILE_BUF_SIZE 1024
 
 typedef struct Queue {
   int *sockets;
@@ -92,17 +94,27 @@ void* worker(void* arg) {
     } else if (strncmp("/files/", path, 7) == 0) {
       char filepath[1024];
       sprintf(filepath, "%s%s", file_dir, path + 6);
-      FILE *file_d;
-      if ((file_d = fopen(filepath, "r")) == NULL) {
+      int file_d = open(filepath, O_RDONLY, 0);
+      if (file_d < 0) {
         printf("Can't open file '%s'\n", filepath);
-        continue;
+        goto notfound;
       }
-      printf("Sending file '%s'...\n", filepath);
-      char *res = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n";
+      char buf[FILE_BUF_SIZE];
+      int n;
+      int filesize = 0;
+      while ((n = read(file_d, buf, FILE_BUF_SIZE)) > 0) {
+        filesize += n;
+      }
+      printf("Sending file '%s' (%d bytes)...\n", filepath, filesize);
+      char res[2048];
+      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", filesize, buf);
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else {
-      char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
-      bytes_sent = send(client_fd, res, strlen(res), 0);
+notfound:
+      {
+        char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
+        bytes_sent = send(client_fd, res, strlen(res), 0);
+      }
     }
     printf("[worker %d] Sent %d bytes.\n", id, bytes_sent);
     close(client_fd);
