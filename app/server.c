@@ -47,24 +47,36 @@ void* worker(void* arg) {
     queue->first = (queue->first + 1) % queue->size;
     pthread_mutex_unlock(&queue->mutex);
 
-    // printf("[worker %d] Handling request.\n", id);
-    char buffer[1024];
+    char request_buf[1024];
 
-    if (recv(client_fd, buffer, 1024, 0) < 0) {
+    if (recv(client_fd, request_buf, 1024, 0) < 0) {
       printf("[worker %d] Can't receive request: %s\n", id, strerror(errno));
-      // return 1;
+      continue;
     }
 
+    // GET /echo/hello HTTP/1.1\r\nHost: localhost:4221\r\n\r\n
+    const char *path_start = strchr(request_buf, ' ') + 1;
+    const char *protocol_start = strchr(path_start, ' ') + 1;
+    const char *headers_start = strstr(protocol_start, "\r\n") + 1;
+    const char *body_start = strstr(headers_start, "\r\n\r\n") + 4;
+    const char *clength_start = strstr(headers_start, "Content-Length: ");
+
+    int clength = 0;
+    if (clength_start != NULL) {
+      clength = strtol(clength_start+16, NULL, 10);
+    }
+
+    char method[path_start - request_buf];
+    char path[protocol_start-path_start];
+
+    strncpy(method, request_buf, path_start-request_buf);
+    strncpy(path, path_start, protocol_start-path_start);
+
+    // FIXME: simpler pointer math
+    method[sizeof(method)-1] = '\0';
+    path[sizeof(path)-1] = '\0';
+
     int bytes_sent;
-    char *path_start = strchr(buffer, ' ')+1;
-    char *headers_start = strchr(path_start, ' ');
-
-    char method[path_start - buffer];
-    char path[headers_start-path_start];
-
-    strncpy(method, buffer, path_start-buffer-1);
-    strncpy(path, path_start, headers_start-path_start);
-
     int match = 0;
 
     if (strcmp(path, "/") == 0) {
@@ -80,21 +92,12 @@ void* worker(void* arg) {
     } else if (strncmp("/user-agent", path, 11) == 0) {
       match = 1;
       char res[1042];
-
-      // TODO: remove the use of strtok
-      char *header = strtok(NULL, "\r\n");
-      char *msg = "";
-      while (header != NULL) {
-        // FIXME: headers are case-insensitive
-        if (strncmp("User-Agent:", header, 11) == 0) {
-          strtok(header, ":");
-          msg = strtok(NULL, "\r\n") + 1;
-          break;
-        }
-        header = strtok(NULL, "\r\n");
-      }
-
-      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
+      const char *uagent_start = strstr(headers_start, "User-Agent: ")+12;
+      const char *uagent_end = strstr(uagent_start, "\r\n");
+      char agent[128];
+      strncpy(agent, uagent_start, uagent_end - uagent_start);
+      agent[uagent_end - uagent_start] = '\0';
+      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(agent), agent);
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else if (strncmp("/files/", path, 7) == 0) {
       char filepath[1024];
@@ -118,16 +121,13 @@ void* worker(void* arg) {
           bytes_sent = send(client_fd, res, strlen(res), 0);
         }
       } else if (strcmp(method, "POST") == 0) {
+        printf("Attempting to write file to '%s'\n", filepath);
         int file_d = creat(filepath, 0666);
         if (file_d < 0) {
           printf("Can't write to file '%s'\n", filepath);
         } else {
           match = 1;
-          char *body_start = strstr(headers_start, "\r\n\r\n")+4;
-          char body[FILE_BUF_SIZE];
-          strcpy(body, body_start);
-          // printf("body: %s\n", body);
-          write(file_d, body, sizeof(body));
+          write(file_d, body_start, clength);
           char *res = "HTTP/1.1 201 Created\r\n\r\n";
           bytes_sent = send(client_fd, res, strlen(res), 0);
         }
@@ -135,6 +135,7 @@ void* worker(void* arg) {
     }
 
     if (!match) {
+      printf("Not found: %s %s\n", method, path);
       char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     }
