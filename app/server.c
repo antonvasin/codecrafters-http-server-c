@@ -63,7 +63,7 @@ void* worker(void* arg) {
     path = strtok(NULL, " ");
 
     if (strcmp(path, "/") == 0) {
-      char* res = "HTTP/1.1 200 OK\r\n\r\n";
+      char *res = "HTTP/1.1 200 OK\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     } else if (strncmp("/echo/", path, 6) == 0) {
       char res[1024];
@@ -87,6 +87,11 @@ void* worker(void* arg) {
 
       sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
       bytes_sent = send(client_fd, res, strlen(res), 0);
+    } else if (strncmp("/files/", path, 7) == 0) {
+      char *filename = path + 7;
+      printf("Sending file '%s'...\n", filename);
+      char *res = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n";
+      bytes_sent = send(client_fd, res, strlen(res), 0);
     } else {
       char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
@@ -107,6 +112,7 @@ int main(int argc, char **argv) {
   if (argc > 1) {
     while (--argc > 0 && *(++argv)[0] == '-') {
       if (strstr(*argv, "--directory") != NULL) {
+        // Save path and advance current pointer one arg ahead
         strcpy(path, *++argv);
         --argc;
         printf("Directory is set to '%s'\n", path);
