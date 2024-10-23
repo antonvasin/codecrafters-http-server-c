@@ -56,8 +56,15 @@ void* worker(void* arg) {
     }
 
     int bytes_sent;
-    char *method = strtok(buffer, " ");
-    char *path = strtok(NULL, " ");
+    char *path_start = strchr(buffer, ' ')+1;
+    char *headers_start = strchr(path_start, ' ');
+
+    char method[path_start - buffer];
+    char path[headers_start-path_start];
+
+    strncpy(method, buffer, path_start-buffer-1);
+    strncpy(path, path_start, headers_start-path_start);
+
     int match = 0;
 
     if (strcmp(path, "/") == 0) {
@@ -74,6 +81,7 @@ void* worker(void* arg) {
       match = 1;
       char res[1042];
 
+      // TODO: remove the use of strtok
       char *header = strtok(NULL, "\r\n");
       char *msg = "";
       while (header != NULL) {
@@ -115,8 +123,11 @@ void* worker(void* arg) {
           printf("Can't write to file '%s'\n", filepath);
         } else {
           match = 1;
-          // char *body = strstr(buffer, "\r\n\r\n");
-          printf("BODY %s\n", buffer);
+          char *body_start = strstr(headers_start, "\r\n\r\n")+4;
+          char body[FILE_BUF_SIZE];
+          strcpy(body, body_start);
+          // printf("body: %s\n", body);
+          write(file_d, body, sizeof(body));
           char *res = "HTTP/1.1 201 Created\r\n\r\n";
           bytes_sent = send(client_fd, res, strlen(res), 0);
         }
