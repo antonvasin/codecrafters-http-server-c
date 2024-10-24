@@ -59,12 +59,6 @@ void* worker(void* arg) {
     const char *protocol_start = strchr(path_start, ' ') + 1;
     const char *headers_start = strstr(protocol_start, "\r\n") + 1;
     const char *body_start = strstr(headers_start, "\r\n\r\n") + 4;
-    const char *clength_start = strstr(headers_start, "Content-Length: ");
-
-    int clength = 0;
-    if (clength_start != NULL) {
-      clength = strtol(clength_start+16, NULL, 10);
-    }
 
     char method[path_start - request_buf];
     char path[protocol_start-path_start];
@@ -76,29 +70,47 @@ void* worker(void* arg) {
     method[sizeof(method)-1] = '\0';
     path[sizeof(path)-1] = '\0';
 
-    int bytes_sent;
     int match = 0;
+    char res[4096];
+    char status[256];
+    char headers[256];
+    char body[2048];
+    int bytes_sent;
+
+    const char *encoding_start = strcasestr(headers_start, "Accept-Encoding:");
+    int headers_len = 0;
+    if (encoding_start != NULL) {
+      encoding_start += 16;
+      if (encoding_start[0] == ' ') ++encoding_start;
+      // const char *encoding_end = strstr(encoding_start, "\r\n");
+      // printf("encoding %s\n", encoding_start);
+      if (strstr(encoding_start, "gzip") != NULL) {
+        headers_len += sprintf(headers, "Content-Encoding: gzip\r\n");
+      }
+    }
 
     if (strcmp(path, "/") == 0) {
       match = 1;
-      char *res = "HTTP/1.1 200 OK\r\n\r\n";
-      bytes_sent = send(client_fd, res, strlen(res), 0);
+      strcpy(status, "200 OK");
     } else if (strncmp("/echo/", path, 6) == 0) {
       match = 1;
-      char res[1024];
       char *msg = path + 6;
-      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(msg), msg);
-      bytes_sent = send(client_fd, res, strlen(res), 0);
+      headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", strlen(msg));
+      strcpy(status, "200 OK");
+      sprintf(body, "%s", msg);
     } else if (strncmp("/user-agent", path, 11) == 0) {
       match = 1;
-      char res[1042];
-      const char *uagent_start = strstr(headers_start, "User-Agent: ")+12;
+
+      const char *uagent_start = strstr(headers_start, "User-Agent:")+11;
+      if (uagent_start[0] == ' ')  ++uagent_start;
       const char *uagent_end = strstr(uagent_start, "\r\n");
+
       char agent[128];
       strncpy(agent, uagent_start, uagent_end - uagent_start);
       agent[uagent_end - uagent_start] = '\0';
-      sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %ld\r\n\r\n%s", strlen(agent), agent);
-      bytes_sent = send(client_fd, res, strlen(res), 0);
+      strcpy(status, "200 OK");
+      headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", strlen(agent));
+      sprintf(body, "%s", agent);
     } else if (strncmp("/files/", path, 7) == 0) {
       char filepath[1024];
       sprintf(filepath, "%s%s", files_dir_path, path + 6);
@@ -116,9 +128,9 @@ void* worker(void* arg) {
             filesize += n;
           }
           printf("Sending file '%s' (%d bytes)...\n", filepath, filesize);
-          char res[2048];
-          sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", filesize, filebuf);
-          bytes_sent = send(client_fd, res, strlen(res), 0);
+          strcpy(status, "200 OK");
+          headers_len += sprintf(headers+headers_len, "Content-Type: application/octet-stream\r\nContent-Length: %d\r\n", filesize);
+          sprintf(body, "%s", filebuf);
         }
       } else if (strcmp(method, "POST") == 0) {
         printf("Attempting to write file to '%s'\n", filepath);
@@ -127,18 +139,25 @@ void* worker(void* arg) {
           printf("Can't write to file '%s'\n", filepath);
         } else {
           match = 1;
+          int clength = 0;
+          const char *clength_start = strcasestr(headers_start, "Content-Length:");
+          if (clength_start != NULL) {
+            clength = strtol(clength_start+16, NULL, 10);
+          }
           write(file_d, body_start, clength);
-          char *res = "HTTP/1.1 201 Created\r\n\r\n";
-          bytes_sent = send(client_fd, res, strlen(res), 0);
+          strcpy(status, "201 Created");
         }
       }
     }
 
     if (!match) {
       printf("Not found: %s %s\n", method, path);
-      char* res =  "HTTP/1.1 404 Not Found\r\n\r\n";
+      char* res = "HTTP/1.1 404 Not Found\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
     }
+
+    sprintf(res, "HTTP/1.1 %s\r\n%s\r\n%s", status, headers, body);
+    bytes_sent = send(client_fd, res, strlen(res), 0);
 
     printf("[worker %d] Sent %d bytes.\n", id, bytes_sent);
     close(client_fd);
