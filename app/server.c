@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -8,6 +9,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <fcntl.h>
+#include <ctype.h>
 
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
@@ -30,6 +32,17 @@ typedef struct ThreadPool {
 Queue *queue;
 
 char files_dir_path[1024];
+
+char *strlower(char *buf, char *str) {
+  int c;
+  int i = 0;
+  while ((c = str[i]) != '\0') {
+    buf[i] = isupper(c) ? tolower(c) : c;
+    ++i;
+  }
+  buf[i] = '\0';
+  return buf;
+}
 
 void* worker(void* arg) {
   int id = *(int *) arg;
@@ -74,11 +87,12 @@ void* worker(void* arg) {
     char res[4096];
     char status[256];
     char headers[256];
+    int headers_len = 0;
     char body[2048];
     int bytes_sent;
 
     const char *encoding_start = strcasestr(headers_start, "Accept-Encoding:");
-    int headers_len = 0;
+    printf("strcasestr %s\n", encoding_start);
     if (encoding_start != NULL) {
       encoding_start += 16;
       if (encoding_start[0] == ' ') ++encoding_start;
