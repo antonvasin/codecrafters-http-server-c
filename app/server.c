@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include "zlib.h"
 
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
@@ -32,17 +33,6 @@ typedef struct ThreadPool {
 Queue *queue;
 
 char files_dir_path[1024];
-
-char *strlower(char *buf, char *str) {
-  int c;
-  int i = 0;
-  while ((c = str[i]) != '\0') {
-    buf[i] = isupper(c) ? tolower(c) : c;
-    ++i;
-  }
-  buf[i] = '\0';
-  return buf;
-}
 
 void* worker(void* arg) {
   int id = *(int *) arg;
