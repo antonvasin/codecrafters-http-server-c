@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -15,6 +16,8 @@
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
 #define FILE_BUF_SIZE 1024
+#define ZLIB_CHUNK 16384
+#define ZLIB_LEVEL Z_DEFAULT_COMPRESSION
 
 typedef struct Queue {
   int *sockets;
@@ -73,11 +76,12 @@ void* worker(void* arg) {
     method[sizeof(method)-1] = '\0';
     path[sizeof(path)-1] = '\0';
 
-    int match = 0;
+    bool match = false;
     char res[4096];
     char status[256];
     char headers[256];
     int headers_len = 0;
+    bool is_gzip = false;
     char body[2048];
     int bytes_sent;
 
@@ -89,21 +93,22 @@ void* worker(void* arg) {
       // const char *encoding_end = strstr(encoding_start, "\r\n");
       // printf("encoding %s\n", encoding_start);
       if (strstr(encoding_start, "gzip") != NULL) {
+        is_gzip = true;
         headers_len += sprintf(headers, "Content-Encoding: gzip\r\n");
       }
     }
 
     if (strcmp(path, "/") == 0) {
-      match = 1;
+      match = true;
       strcpy(status, "200 OK");
     } else if (strncmp("/echo/", path, 6) == 0) {
-      match = 1;
+      match = true;
       char *msg = path + 6;
       headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", strlen(msg));
       strcpy(status, "200 OK");
       sprintf(body, "%s", msg);
     } else if (strncmp("/user-agent", path, 11) == 0) {
-      match = 1;
+      match = true;
 
       const char *uagent_start = strstr(headers_start, "User-Agent:")+11;
       if (uagent_start[0] == ' ')  ++uagent_start;
@@ -124,7 +129,7 @@ void* worker(void* arg) {
         if (file_d < 0) {
           printf("Can't open file '%s'\n", filepath);
         } else {
-          match = 1;
+          match = true;
           char filebuf[FILE_BUF_SIZE];
           int filesize = 0;
           int n;
@@ -142,7 +147,7 @@ void* worker(void* arg) {
         if (file_d < 0) {
           printf("Can't write to file '%s'\n", filepath);
         } else {
-          match = 1;
+          match = true;
           int clength = 0;
           const char *clength_start = strcasestr(headers_start, "Content-Length:");
           if (clength_start != NULL) {
@@ -158,6 +163,24 @@ void* worker(void* arg) {
       printf("Not found: %s %s\n", method, path);
       char* res = "HTTP/1.1 404 Not Found\r\n\r\n";
       bytes_sent = send(client_fd, res, strlen(res), 0);
+    }
+
+    if (is_gzip) {
+      int ret, flush;
+      unsigned have;
+      z_stream strm;
+      unsigned char in[ZLIB_CHUNK];
+      unsigned char out[ZLIB_CHUNK];
+
+      /* allocate deflate state */
+      strm.zalloc = Z_NULL;
+      strm.zfree = Z_NULL;
+      strm.opaque = Z_NULL;
+      ret = deflateInit(&strm, ZLIB_LEVEL);
+      if (ret != Z_OK) {
+        printf("Error while compressing request body.\n");
+        continue;
+      }
     }
 
     sprintf(res, "HTTP/1.1 %s\r\n%s\r\n%s", status, headers, body);
