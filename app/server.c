@@ -34,7 +34,7 @@ Queue *queue;
 
 char files_dir_path[1024];
 
-char* gzip_deflate(char *data, size_t data_len, size_t *gzip_len) {
+void gzip_deflate(char *data, size_t data_len, char *out, size_t *out_len) {
   z_stream z;
 
   z.zalloc = Z_NULL;
@@ -45,19 +45,18 @@ char* gzip_deflate(char *data, size_t data_len, size_t *gzip_len) {
   deflateInit2(&z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY);
   // Get max length of resulting compression and malloc the buffer with it
   size_t max_len = deflateBound(&z, data_len);
-  char *output = malloc(max_len);
+  // char *output = malloc(max_len);
 
   z.avail_in = data_len;
   z.next_in = (Bytef *)data;
   z.avail_out = max_len;
-  z.next_out = (Bytef *)output;
+  z.next_out = (Bytef *)out;
 
   deflate(&z, Z_FINISH);
   deflateEnd(&z);
 
-  *gzip_len = z.total_out;
-  printf("[z] Zipping '%s' (%ld) -> %02x (%ldb), in %d, out %d\n", data, data_len, *output, *gzip_len, z.avail_in, z.avail_out);
-  return output;
+  *out_len = z.total_out;
+  printf("[z] Zipping '%s' (%ld) -> %02x (%ldb), in %d, out %d\n", data, data_len, *out, *out_len, z.avail_in, z.avail_out);
 }
 
 void* worker(void* arg) {
@@ -131,9 +130,7 @@ void* worker(void* arg) {
       char *msg = path + 6;
       body_len = strlen(msg);
       if (needs_gzip) {
-        char *zipped = gzip_deflate(msg, strlen(msg), &body_len);
-        memcpy(body, zipped, body_len);
-        free(zipped);
+        gzip_deflate(msg, strlen(msg), body, &body_len);
       } else {
         sprintf(body, "%s", msg);
       }
@@ -233,9 +230,9 @@ int main(int argc, char **argv) {
   } else {
     getcwd(files_dir_path, sizeof((files_dir_path)));
   }
+
   printf("Directory is set to '%s'\n", files_dir_path);
 
-  // You can use print statements as follows for debugging, they'll be visible when running tests.
   printf("Logs from your program will appear here!\n");
 
   int server_fd, client_fd;
