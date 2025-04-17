@@ -43,10 +43,7 @@ void gzip_deflate(char *data, size_t data_len, char *out, size_t *out_len) {
 
   // Init zlib
   deflateInit2(&z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY);
-  // Get max length of resulting compression and malloc the buffer with it
   size_t max_len = deflateBound(&z, data_len);
-  // char *output = malloc(max_len);
-
   z.avail_in = data_len;
   z.next_in = (Bytef *)data;
   z.avail_out = max_len;
@@ -56,7 +53,6 @@ void gzip_deflate(char *data, size_t data_len, char *out, size_t *out_len) {
   deflateEnd(&z);
 
   *out_len = z.total_out;
-  printf("[z] Zipping '%s' (%ld) -> %02x (%ldb), in %d, out %d\n", data, data_len, *out, *out_len, z.avail_in, z.avail_out);
 }
 
 void* worker(void* arg) {
@@ -100,21 +96,18 @@ void* worker(void* arg) {
     path[sizeof(path)-1] = '\0';
 
     int match = 0;
-    char res[8192];
+    int needs_gzip = 0;
+
     char status[256];
     char headers[256];
-    int headers_len = 0;
+    size_t headers_len = 0;
     char body[4096];
     size_t body_len;
-    int bytes_sent;
-    int needs_gzip = 0;
 
     const char *encoding_start = strcasestr(headers_start, "Accept-Encoding:");
     if (encoding_start != NULL) {
       encoding_start += 16;
       if (encoding_start[0] == ' ') ++encoding_start;
-      // const char *encoding_end = strstr(encoding_start, "\r\n");
-      // printf("encoding %s\n", encoding_start);
       if (strstr(encoding_start, "gzip") != NULL) {
         headers_len += sprintf(headers, "Content-Encoding: gzip\r\n");
         needs_gzip = 1;
@@ -128,10 +121,10 @@ void* worker(void* arg) {
     } else if (strncmp("/echo/", path, 6) == 0) {
       match = 1;
       char *msg = path + 6;
-      body_len = strlen(msg);
       if (needs_gzip) {
         gzip_deflate(msg, strlen(msg), body, &body_len);
       } else {
+        body_len = strlen(msg);
         sprintf(body, "%s", msg);
       }
       headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", body_len);
@@ -189,6 +182,9 @@ void* worker(void* arg) {
         }
       }
     }
+
+    int bytes_sent;
+    char res[8192];
 
     if (!match) {
       printf("Not found: %s %s\n", method, path);
