@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <zlib.h>
 
 #define WORKER_THREADS 5
 #define QUEUE_SIZE 5
@@ -32,6 +33,32 @@ typedef struct ThreadPool {
 Queue *queue;
 
 char files_dir_path[1024];
+
+char* gzip_deflate(char *data, size_t data_len, size_t *gzip_len) {
+  z_stream z;
+
+  z.zalloc = Z_NULL;
+  z.zfree = Z_NULL;
+  z.opaque = Z_NULL;
+
+  // Init zlib
+  deflateInit2(&z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY);
+  // Get max length of resulting compression and malloc the buffer with it
+  size_t max_len = deflateBound(&z, data_len);
+  char *output = malloc(max_len);
+
+  z.avail_in = data_len;
+  z.next_in = (Bytef *)data;
+  z.avail_out = max_len;
+  z.next_out = (Bytef *)output;
+
+  deflate(&z, Z_FINISH);
+  deflateEnd(&z);
+
+  *gzip_len = z.total_out;
+  printf("[z] Zipping '%s' (%ld) -> %02x (%ldb), in %d, out %d\n", data, data_len, *output, *gzip_len, z.avail_in, z.avail_out);
+  return output;
+}
 
 void* worker(void* arg) {
   int id = *(int *) arg;
@@ -56,6 +83,7 @@ void* worker(void* arg) {
       continue;
     }
 
+    // --- Parsing request ---
     // GET /echo/hello HTTP/1.1\r\nHost: localhost:4221\r\n\r\n
     const char *path_start = strchr(request_buf, ' ') + 1;
     const char *protocol_start = strchr(path_start, ' ') + 1;
@@ -73,15 +101,16 @@ void* worker(void* arg) {
     path[sizeof(path)-1] = '\0';
 
     int match = 0;
-    char res[4096];
+    char res[8192];
     char status[256];
     char headers[256];
     int headers_len = 0;
-    char body[2048];
+    char body[4096];
+    size_t body_len;
     int bytes_sent;
+    int needs_gzip = 0;
 
     const char *encoding_start = strcasestr(headers_start, "Accept-Encoding:");
-    printf("strcasestr %s\n", encoding_start);
     if (encoding_start != NULL) {
       encoding_start += 16;
       if (encoding_start[0] == ' ') ++encoding_start;
@@ -89,18 +118,27 @@ void* worker(void* arg) {
       // printf("encoding %s\n", encoding_start);
       if (strstr(encoding_start, "gzip") != NULL) {
         headers_len += sprintf(headers, "Content-Encoding: gzip\r\n");
+        needs_gzip = 1;
       }
     }
 
+    // --- Known paths ----
     if (strcmp(path, "/") == 0) {
       match = 1;
       strcpy(status, "200 OK");
     } else if (strncmp("/echo/", path, 6) == 0) {
       match = 1;
       char *msg = path + 6;
-      headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", strlen(msg));
+      body_len = strlen(msg);
+      if (needs_gzip) {
+        char *zipped = gzip_deflate(msg, strlen(msg), &body_len);
+        memcpy(body, zipped, body_len);
+        free(zipped);
+      } else {
+        sprintf(body, "%s", msg);
+      }
+      headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", body_len);
       strcpy(status, "200 OK");
-      sprintf(body, "%s", msg);
     } else if (strncmp("/user-agent", path, 11) == 0) {
       match = 1;
 
@@ -112,7 +150,8 @@ void* worker(void* arg) {
       strncpy(agent, uagent_start, uagent_end - uagent_start);
       agent[uagent_end - uagent_start] = '\0';
       strcpy(status, "200 OK");
-      headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", strlen(agent));
+      body_len = strlen(agent);
+      headers_len += sprintf(headers+headers_len, "Content-Type: text/plain\r\nContent-Length: %ld\r\n", body_len);
       sprintf(body, "%s", agent);
     } else if (strncmp("/files/", path, 7) == 0) {
       char filepath[1024];
@@ -132,7 +171,8 @@ void* worker(void* arg) {
           }
           printf("Sending file '%s' (%d bytes)...\n", filepath, filesize);
           strcpy(status, "200 OK");
-          headers_len += sprintf(headers+headers_len, "Content-Type: application/octet-stream\r\nContent-Length: %d\r\n", filesize);
+          body_len = filesize;
+          headers_len += sprintf(headers+headers_len, "Content-Type: application/octet-stream\r\nContent-Length: %ld\r\n", body_len);
           sprintf(body, "%s", filebuf);
         }
       } else if (strcmp(method, "POST") == 0) {
@@ -159,8 +199,16 @@ void* worker(void* arg) {
       bytes_sent = send(client_fd, res, strlen(res), 0);
     }
 
-    sprintf(res, "HTTP/1.1 %s\r\n%s\r\n%s", status, headers, body);
-    bytes_sent = send(client_fd, res, strlen(res), 0);
+    if (needs_gzip) {
+      int headers_len = sprintf(res, "HTTP/1.1 %s\r\n%s\r\n", status, headers);
+      // Using memcpy for binary data, otherwise (strcpy, etc) will stop at first `\0`;
+      memcpy(res + headers_len, body, body_len);
+      bytes_sent = send(client_fd, res, headers_len + body_len, 0);
+    } else {
+      sprintf(res, "HTTP/1.1 %s\r\n%s\r\n%s\r\n", status, headers, body);
+      bytes_sent = send(client_fd, res, strlen(res), 0);
+    }
+
 
     printf("[worker %d] Sent %d bytes.\n", id, bytes_sent);
     close(client_fd);
